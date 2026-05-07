@@ -39,4 +39,5 @@ Open [http://127.0.0.1:5000](http://127.0.0.1:5000).
    - `SESSION_COOKIE_SECURE` = `true`
    - `FLASK_DEBUG` = `0`
    - (optional) `GARMIN_TOKEN_ROOT` = persistent writable path
-5. Ensure persistent disk is mounted so Garmin tokens survive restarts/deploys.
+5. On Free tier, token storage is ephemeral (`/tmp/garmin_tokens`) and users may need to log in again after restarts/deploys.
+6. If you upgrade the service plan, attach a persistent disk and set `GARMIN_TOKEN_ROOT` to that mount path.
