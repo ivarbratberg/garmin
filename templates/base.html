@@ -58,6 +58,81 @@
       .button-link.secondary {
         background: #666;
       }
+      .modal-backdrop {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.45);
+        z-index: 1000;
+        align-items: center;
+        justify-content: center;
+        padding: 1rem;
+      }
+      .modal-backdrop.open {
+        display: flex;
+      }
+      .modal-panel {
+        background: #fff;
+        border-radius: 10px;
+        max-width: 960px;
+        width: 100%;
+        max-height: 90vh;
+        overflow: auto;
+        padding: 1rem 1.25rem;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+      }
+      .modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 1rem;
+        margin-bottom: 0.75rem;
+      }
+      .modal-header h2 {
+        margin: 0;
+        font-size: 1.15rem;
+      }
+      .modal-close {
+        background: transparent;
+        color: #333;
+        border: none;
+        font-size: 1.5rem;
+        line-height: 1;
+        cursor: pointer;
+        padding: 0 0.25rem;
+      }
+      .metric-picker {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.6rem 1.2rem;
+        margin: 0.75rem 0 1rem;
+        padding: 0.75rem;
+        background: #f8f8f8;
+        border-radius: 6px;
+        border: 1px solid #e5e5e5;
+      }
+      .metric-picker label {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        cursor: pointer;
+        font-size: 0.9rem;
+      }
+      tr.activity-row {
+        cursor: pointer;
+      }
+      tr.activity-row:hover {
+        background: #f0f7ff;
+      }
+      .chart-wrap {
+        position: relative;
+        height: 380px;
+        margin-top: 0.5rem;
+      }
+      .chart-status {
+        padding: 1rem;
+        color: #555;
+      }
     </style>
   </head>
   <body>

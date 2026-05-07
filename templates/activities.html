@@ -9,6 +9,9 @@
     <p>
       <a class="button-link secondary" href="{{ url_for('logout') }}">Log out</a>
     </p>
+    <p class="chart-status" style="font-size:0.9rem;color:#666;margin-top:0;">
+      Click a row to open charts and choose which metrics to plot.
+    </p>
 
     {% if activities %}
       <table>
@@ -23,7 +26,7 @@
         </thead>
         <tbody>
           {% for activity in activities %}
-            <tr>
+            <tr class="activity-row" data-activity-id="{{ activity.get('activityId', '') }}">
               <td>{{ activity.get("activityName", "N/A") }}</td>
               <td>{{ activity.get("activityType", {}).get("typeKey", "N/A") }}</td>
               <td>{{ activity.get("startTimeLocal", "N/A") }}</td>
@@ -41,4 +44,237 @@
       <p>No activities found.</p>
     {% endif %}
   </div>
+
+  <div id="chart-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="chart-modal-title">
+    <div class="modal-panel">
+      <div class="modal-header">
+        <h2 id="chart-modal-title">Activity</h2>
+        <button type="button" class="modal-close" id="chart-modal-close" aria-label="Close">&times;</button>
+      </div>
+      <div id="chart-modal-status" class="chart-status"></div>
+      <div id="metric-picker" class="metric-picker" hidden></div>
+      <div class="chart-wrap">
+        <canvas id="activity-chart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+  <script>
+    (function () {
+      const modal = document.getElementById("chart-modal");
+      const titleEl = document.getElementById("chart-modal-title");
+      const statusEl = document.getElementById("chart-modal-status");
+      const pickerEl = document.getElementById("metric-picker");
+      const closeBtn = document.getElementById("chart-modal-close");
+      const canvas = document.getElementById("activity-chart");
+      let chart = null;
+      let lastPayload = null;
+
+      function openModal() {
+        modal.classList.add("open");
+      }
+
+      function closeModal() {
+        modal.classList.remove("open");
+        if (chart) {
+          chart.destroy();
+          chart = null;
+        }
+        lastPayload = null;
+        pickerEl.innerHTML = "";
+        pickerEl.hidden = true;
+        statusEl.textContent = "";
+      }
+
+      function axisIdForUnit(unit) {
+        const u = unit || "value";
+        return "y_" + String(u).replace(/[^a-zA-Z0-9]+/g, "_");
+      }
+
+      function palette(i) {
+        const colors = [
+          "rgb(0, 119, 204)",
+          "rgb(220, 80, 60)",
+          "rgb(40, 160, 90)",
+          "rgb(160, 90, 200)",
+          "rgb(200, 130, 40)",
+          "rgb(90, 130, 180)",
+        ];
+        return colors[i % colors.length];
+      }
+
+      function renderChart() {
+        if (!lastPayload || !lastPayload.metrics || !lastPayload.metrics.length) {
+          return;
+        }
+        const labels = lastPayload.labels || [];
+        const selected = [];
+        pickerEl.querySelectorAll("input[type=checkbox]:checked").forEach(function (cb) {
+          const key = cb.value;
+          const m = lastPayload.metrics.find(function (x) { return x.key === key; });
+          if (m) selected.push(m);
+        });
+
+        if (selected.length === 0) {
+          statusEl.textContent = "Select at least one metric to plot.";
+          if (chart) {
+            chart.destroy();
+            chart = null;
+          }
+          return;
+        }
+
+        statusEl.textContent = "";
+
+        const units = [];
+        selected.forEach(function (m) {
+          const u = m.unit || "";
+          if (units.indexOf(u) === -1) units.push(u);
+        });
+
+        const scales = {
+          x: {
+            title: { display: true, text: "Time / sample" },
+            ticks: { maxRotation: 45, autoSkip: true, maxTicksLimit: 12 },
+          },
+        };
+
+        units.forEach(function (unit, idx) {
+          const id = axisIdForUnit(unit);
+          const isFirst = idx === 0;
+          scales[id] = {
+            type: "linear",
+            position: isFirst ? "left" : "right",
+            title: {
+              display: true,
+              text: unit ? unit : "Value",
+            },
+            grid: {
+              drawOnChartArea: isFirst,
+            },
+          };
+        });
+
+        const datasets = selected.map(function (m, i) {
+          return {
+            label: m.label,
+            data: m.data,
+            borderColor: palette(i),
+            backgroundColor: palette(i).replace("rgb", "rgba").replace(")", ", 0.12)"),
+            tension: 0.15,
+            spanGaps: true,
+            pointRadius: 0,
+            yAxisID: axisIdForUnit(m.unit),
+          };
+        });
+
+        if (chart) chart.destroy();
+        chart = new Chart(canvas.getContext("2d"), {
+          type: "line",
+          data: { labels: labels, datasets: datasets },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: "index", intersect: false },
+            plugins: {
+              legend: { position: "bottom" },
+              tooltip: { enabled: true },
+            },
+            scales: scales,
+          },
+        });
+      }
+
+      function buildPicker(payload) {
+        pickerEl.innerHTML = "";
+        const metrics = payload.metrics || [];
+        if (!metrics.length) {
+          pickerEl.hidden = true;
+          return;
+        }
+        pickerEl.hidden = false;
+        metrics.forEach(function (m, idx) {
+          const id = "metric-" + m.key.replace(/[^a-zA-Z0-9]/g, "_") + "-" + idx;
+          const wrap = document.createElement("label");
+          const input = document.createElement("input");
+          input.type = "checkbox";
+          input.value = m.key;
+          input.id = id;
+          input.checked = idx < 3;
+          input.addEventListener("change", renderChart);
+          wrap.appendChild(input);
+          const span = document.createElement("span");
+          span.textContent = m.label;
+          wrap.appendChild(span);
+          pickerEl.appendChild(wrap);
+        });
+      }
+
+      async function loadActivity(activityId) {
+        openModal();
+        titleEl.textContent = "Loading…";
+        statusEl.textContent = "Fetching activity details…";
+        pickerEl.hidden = true;
+        pickerEl.innerHTML = "";
+        if (chart) {
+          chart.destroy();
+          chart = null;
+        }
+
+        const url = "/api/activities/" + encodeURIComponent(activityId) + "/chart-data";
+        let res;
+        try {
+          res = await fetch(url, { credentials: "same-origin" });
+        } catch (e) {
+          statusEl.textContent = "Network error while loading data.";
+          return;
+        }
+
+        if (res.status === 401) {
+          statusEl.textContent = "Session expired. Please log in again.";
+          return;
+        }
+
+        let payload;
+        try {
+          payload = await res.json();
+        } catch (e) {
+          statusEl.textContent = "Invalid response from server.";
+          return;
+        }
+
+        if (!res.ok) {
+          statusEl.textContent = payload.error || "Could not load chart data.";
+          return;
+        }
+
+        lastPayload = payload;
+        titleEl.textContent = payload.title || "Activity";
+        if (payload.message) {
+          statusEl.textContent = payload.message;
+        } else {
+          statusEl.textContent = "";
+        }
+        buildPicker(payload);
+        renderChart();
+      }
+
+      document.querySelectorAll("tr.activity-row").forEach(function (row) {
+        row.addEventListener("click", function () {
+          const id = row.getAttribute("data-activity-id");
+          if (!id) return;
+          loadActivity(id);
+        });
+      });
+
+      closeBtn.addEventListener("click", closeModal);
+      modal.addEventListener("click", function (e) {
+        if (e.target === modal) closeModal();
+      });
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape" && modal.classList.contains("open")) closeModal();
+      });
+    })();
+  </script>
 {% endblock %}

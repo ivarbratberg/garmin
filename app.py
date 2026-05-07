@@ -1,10 +1,11 @@
 import os
+import re
 import shutil
 from hashlib import sha256
 from datetime import timedelta
 from typing import Any
 
-from flask import Flask, flash, redirect, render_template, request, session, url_for
+from flask import Flask, flash, jsonify, redirect, render_template, request, session, url_for
 from flask_session import Session
 from garminconnect import Garmin
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -64,6 +65,139 @@ def load_activities(email: str, token_store: str, limit: int = 10) -> list[dict[
     return client.get_activities(0, limit)
 
 
+_TIME_METRIC_KEYS = (
+    "sumElapsedDuration",
+    "timerDurationInSeconds",
+    "timerTime",
+    "directRunningTimeInSeconds",
+    "clock",
+    "timestamp",
+)
+
+
+def _format_elapsed_label(seconds: float) -> str:
+    sec = max(0, int(round(seconds)))
+    h, rem = divmod(sec, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"
+
+
+def _series_from_activity_details(details: dict[str, Any]) -> tuple[list[str], list[dict[str, Any]]]:
+    """Turn Garmin activity details JSON into x-labels and plottable metric series."""
+    descriptors = details.get("metricDescriptors") or []
+    samples = details.get("activityDetailMetrics") or []
+    if not isinstance(descriptors, list) or not descriptors:
+        return [], []
+    if not isinstance(samples, list):
+        return [], []
+
+    n_desc = len(descriptors)
+    columns: list[list[Any]] = [[] for _ in range(n_desc)]
+
+    for sample in samples:
+        if not isinstance(sample, dict):
+            continue
+        mvals = sample.get("metrics")
+        if not isinstance(mvals, list):
+            continue
+        for i in range(min(n_desc, len(mvals))):
+            columns[i].append(mvals[i])
+
+    time_idx: int | None = None
+    for preferred in _TIME_METRIC_KEYS:
+        for i, desc in enumerate(descriptors):
+            if isinstance(desc, dict) and desc.get("key") == preferred:
+                time_idx = i
+                break
+        if time_idx is not None:
+            break
+    if time_idx is None:
+        for i, desc in enumerate(descriptors):
+            if not isinstance(desc, dict):
+                continue
+            key = (desc.get("key") or "").lower()
+            if any(t in key for t in ("elapsed", "timer", "clock", "timestamp")):
+                time_idx = i
+                break
+
+    labels: list[str] = []
+    if time_idx is not None and columns[time_idx]:
+        raw_times = columns[time_idx]
+        for v in raw_times:
+            if v is None:
+                labels.append("")
+                continue
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                labels.append(str(v))
+                continue
+            if fv > 1e6:
+                fv = fv / 1000.0
+            labels.append(_format_elapsed_label(fv))
+    else:
+        n_rows = max((len(c) for c in columns), default=0)
+        labels = [str(i) for i in range(n_rows)]
+
+    metrics_out: list[dict[str, Any]] = []
+    for i, desc in enumerate(descriptors):
+        if not isinstance(desc, dict):
+            continue
+        if i == time_idx:
+            continue
+        key = desc.get("key") or f"metric_{i}"
+        unit = ""
+        u = desc.get("unit")
+        if isinstance(u, dict):
+            unit = u.get("key") or u.get("factor") or ""
+        data_raw = columns[i] if i < len(columns) else []
+        data: list[float | None] = []
+        for v in data_raw:
+            if v is None:
+                data.append(None)
+                continue
+            try:
+                data.append(float(v))
+            except (TypeError, ValueError):
+                data.append(None)
+
+        if not any(x is not None for x in data):
+            continue
+
+        readable = re.sub(r"([a-z])([A-Z])", r"\1 \2", key)
+        readable = readable.replace("_", " ").strip()
+        label = readable[:1].upper() + readable[1:] if readable else key
+        unit_suffix = f" ({unit})" if unit else ""
+        metrics_out.append(
+            {
+                "key": key,
+                "label": f"{label}{unit_suffix}",
+                "unit": unit or None,
+                "data": data,
+            }
+        )
+
+    row_count = max(
+        len(labels),
+        max((len(m["data"]) for m in metrics_out), default=0),
+    )
+    if len(labels) < row_count:
+        labels = labels + [str(i) for i in range(len(labels), row_count)]
+    elif len(labels) > row_count:
+        labels = labels[:row_count]
+
+    for m in metrics_out:
+        d = m["data"]
+        if len(d) > row_count:
+            m["data"] = d[:row_count]
+        elif len(d) < row_count:
+            m["data"] = d + [None] * (row_count - len(d))
+
+    return labels, metrics_out
+
+
 @app.get("/")
 def index():
     if session.get("garmin_email") and session.get("garmin_token_store"):
@@ -115,6 +249,44 @@ def activities():
         return redirect(url_for("login"))
 
     return render_template("activities.html", activities=activities_list, email=email)
+
+
+@app.get("/api/activities/<int:activity_id>/chart-data")
+def activity_chart_data(activity_id: int):
+    email = session.get("garmin_email")
+    token_store = session.get("garmin_token_store")
+    if not email or not token_store:
+        return jsonify({"error": "unauthorized"}), 401
+
+    try:
+        client = _build_client(email=email, token_store=token_store)
+        summary = client.get_activity(str(activity_id))
+        details = client.get_activity_details(str(activity_id), maxchart=4000, maxpoly=4000)
+    except Exception:
+        app.logger.exception("Could not load activity chart data.")
+        return jsonify({"error": "garmin_error"}), 502
+
+    title = summary.get("activityName") or f"Activity {activity_id}"
+    labels, metrics = _series_from_activity_details(details)
+    if not metrics:
+        return jsonify(
+            {
+                "activityId": activity_id,
+                "title": title,
+                "labels": labels,
+                "metrics": [],
+                "message": "No time-series metrics available for this activity.",
+            }
+        )
+
+    return jsonify(
+        {
+            "activityId": activity_id,
+            "title": title,
+            "labels": labels,
+            "metrics": metrics,
+        }
+    )
 
 
 @app.get("/logout")
