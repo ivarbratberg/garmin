@@ -13,6 +13,28 @@
       Click a row to open charts and choose which metrics to plot.
     </p>
 
+    <div
+      class="hrv-card"
+      style="margin:1rem 0;padding:0.85rem;background:#f8f8f8;border-radius:6px;border:1px solid #e5e5e5;"
+    >
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;flex-wrap:wrap;">
+        <div>
+          <strong>HRV (nightly)</strong>
+          <div id="hrv-summary" style="font-size:0.88rem;color:#555;margin-top:0.3rem;">
+            Load HRV data to view latest status.
+          </div>
+        </div>
+        <div style="display:flex;gap:0.5rem;">
+          <button type="button" class="hrv-days-btn" data-days="7">Last 7 days</button>
+          <button type="button" class="hrv-days-btn" data-days="30">Last 30 days</button>
+        </div>
+      </div>
+      <div class="chart-wrap" style="height:260px;margin-top:0.75rem;">
+        <canvas id="hrv-chart"></canvas>
+      </div>
+      <div id="hrv-status" class="chart-status" style="padding:0.4rem 0 0;"></div>
+    </div>
+
     <form
       method="post"
       action="{{ url_for('set_threshold_hr') }}"
@@ -107,7 +129,11 @@
       const pickerEl = document.getElementById("metric-picker");
       const closeBtn = document.getElementById("chart-modal-close");
       const canvas = document.getElementById("activity-chart");
+      const hrvCanvas = document.getElementById("hrv-chart");
+      const hrvStatusEl = document.getElementById("hrv-status");
+      const hrvSummaryEl = document.getElementById("hrv-summary");
       let chart = null;
+      let hrvChart = null;
       let lastPayload = null;
 
       function openModal() {
@@ -299,6 +325,108 @@
         renderChart();
       }
 
+      function renderHrvSummary(latest) {
+        if (!latest) {
+          hrvSummaryEl.textContent = "No recent HRV summary available.";
+          return;
+        }
+        const avg = latest.lastNightAvg == null ? "n/a" : Math.round(latest.lastNightAvg) + " ms";
+        const weekly = latest.weeklyAvg == null ? "n/a" : Math.round(latest.weeklyAvg) + " ms";
+        const status = latest.status || "n/a";
+        hrvSummaryEl.textContent =
+          "Latest (" + latest.date + "): " +
+          "night avg " + avg + ", weekly avg " + weekly + ", status " + status + ".";
+      }
+
+      function renderHrvChart(payload) {
+        const items = payload.items || [];
+        if (!items.length) {
+          if (hrvChart) {
+            hrvChart.destroy();
+            hrvChart = null;
+          }
+          hrvStatusEl.textContent = "No HRV data available for this period.";
+          renderHrvSummary(null);
+          return;
+        }
+
+        const labels = items.map(function (x) { return x.date; });
+        const nightly = items.map(function (x) { return x.lastNightAvg; });
+        const weekly = items.map(function (x) { return x.weeklyAvg; });
+
+        if (hrvChart) hrvChart.destroy();
+        hrvChart = new Chart(hrvCanvas.getContext("2d"), {
+          type: "line",
+          data: {
+            labels: labels,
+            datasets: [
+              {
+                label: "Last night avg HRV (ms)",
+                data: nightly,
+                borderColor: "rgb(0, 119, 204)",
+                backgroundColor: "rgba(0, 119, 204, 0.15)",
+                tension: 0.2,
+                spanGaps: true,
+              },
+              {
+                label: "Weekly avg HRV (ms)",
+                data: weekly,
+                borderColor: "rgb(40, 160, 90)",
+                backgroundColor: "rgba(40, 160, 90, 0.15)",
+                tension: 0.2,
+                spanGaps: true,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: "index", intersect: false },
+            plugins: { legend: { position: "bottom" } },
+            scales: {
+              y: {
+                title: { display: true, text: "HRV (ms)" },
+              },
+            },
+          },
+        });
+        hrvStatusEl.textContent = "";
+        renderHrvSummary(payload.latest || null);
+      }
+
+      async function loadHrv(days) {
+        hrvStatusEl.textContent = "Loading HRV for last " + days + " days...";
+        let res;
+        try {
+          res = await fetch("/api/hrv?days=" + encodeURIComponent(days), {
+            credentials: "same-origin",
+          });
+        } catch (e) {
+          hrvStatusEl.textContent = "Network error while loading HRV data.";
+          return;
+        }
+
+        if (res.status === 401) {
+          hrvStatusEl.textContent = "Session expired. Please log in again.";
+          return;
+        }
+
+        let payload;
+        try {
+          payload = await res.json();
+        } catch (e) {
+          hrvStatusEl.textContent = "Invalid response from server.";
+          return;
+        }
+
+        if (!res.ok) {
+          hrvStatusEl.textContent = payload.error || "Could not load HRV data.";
+          return;
+        }
+
+        renderHrvChart(payload);
+      }
+
       document.querySelectorAll("tr.activity-row").forEach(function (row) {
         row.addEventListener("click", function () {
           const id = row.getAttribute("data-activity-id");
@@ -306,6 +434,13 @@
           loadActivity(id);
         });
       });
+      document.querySelectorAll(".hrv-days-btn").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          const days = btn.getAttribute("data-days") || "7";
+          loadHrv(days);
+        });
+      });
+      loadHrv(7);
 
       closeBtn.addEventListener("click", closeModal);
       modal.addEventListener("click", function (e) {

@@ -34,6 +34,16 @@ On the activities page, set **threshold HR (LTHR)** in bpm. For **running** acti
 - By default, the estimate uses Garmin’s **average HR** from the activity summary (no extra API calls).
 - Set `RTSS_USE_ACTIVITY_STREAM=1` to integrate HR **per recorded sample** from activity details (more accurate, more Garmin API requests).
 
+## HRV (Garmin Connect)
+
+The activities page now includes an HRV panel (7/30-day view) using Garmin nightly HRV summaries:
+
+- `lastNightAvg`
+- `weeklyAvg`
+- `status` (e.g. BALANCED)
+
+Data is fetched via `GET /api/hrv?days=7|30`.
+
 ## Deploy (Render)
 
 1. Push this project to GitHub.

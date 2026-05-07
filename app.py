@@ -2,7 +2,7 @@ import os
 import re
 import shutil
 from hashlib import sha256
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Any
 
 from flask import Flask, flash, jsonify, redirect, render_template, request, session, url_for
@@ -63,6 +63,33 @@ def load_activities(email: str, token_store: str, limit: int = 10) -> list[dict[
     """Authenticate against Garmin Connect using tokens and return activities."""
     client = _build_client(email=email, token_store=token_store)
     return client.get_activities(0, limit)
+
+
+def _to_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_hrv_day(payload: dict[str, Any], day_iso: str) -> dict[str, Any] | None:
+    if not isinstance(payload, dict):
+        return None
+    summary = payload.get("hrvSummary")
+    if not isinstance(summary, dict):
+        return None
+
+    return {
+        "date": day_iso,
+        "lastNightAvg": _to_float(summary.get("lastNightAvg")),
+        "weeklyAvg": _to_float(summary.get("weeklyAvg")),
+        "lastNight5MinHigh": _to_float(summary.get("lastNight5MinHigh")),
+        "status": summary.get("status"),
+        "feedbackPhrase": summary.get("feedbackPhrase"),
+        "baseline": summary.get("baseline") if isinstance(summary.get("baseline"), dict) else {},
+    }
 
 
 def is_running_activity(activity: dict[str, Any]) -> bool:
@@ -501,6 +528,49 @@ def activity_chart_data(activity_id: int):
             "title": title,
             "labels": labels,
             "metrics": metrics,
+        }
+    )
+
+
+@app.get("/api/hrv")
+def hrv_data():
+    email = session.get("garmin_email")
+    token_store = session.get("garmin_token_store")
+    if not email or not token_store:
+        return jsonify({"error": "unauthorized"}), 401
+
+    raw_days = (request.args.get("days") or "7").strip()
+    try:
+        days = int(raw_days)
+    except ValueError:
+        days = 7
+    days = max(1, min(days, 60))
+
+    try:
+        client = _build_client(email=email, token_store=token_store)
+    except Exception:
+        app.logger.exception("Could not authenticate Garmin client for HRV.")
+        return jsonify({"error": "garmin_error"}), 502
+
+    items: list[dict[str, Any]] = []
+    for offset in range(days - 1, -1, -1):
+        day = date.today() - timedelta(days=offset)
+        day_iso = day.isoformat()
+        try:
+            payload = client.get_hrv_data(day_iso)
+        except Exception:
+            app.logger.debug("Could not load HRV for date %s", day_iso)
+            continue
+        normalized = _normalize_hrv_day(payload, day_iso)
+        if normalized:
+            items.append(normalized)
+
+    latest = next((x for x in reversed(items) if x.get("lastNightAvg") is not None), None)
+    return jsonify(
+        {
+            "daysRequested": days,
+            "items": items,
+            "latest": latest,
         }
     )
 
