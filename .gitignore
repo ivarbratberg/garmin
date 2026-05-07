@@ -1,0 +1,5 @@
+.venv/
+__pycache__/
+*.pyc
+instance/flask_session/
+instance/garmin_tokens/

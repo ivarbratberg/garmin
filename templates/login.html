@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block title %}Garmin Login{% endblock %}
+
+{% block content %}
+  <div class="card">
+    <h1>Garmin Login</h1>
+    <p>Sign in to your Garmin account to load your latest activities.</p>
+    <p><small>Your password is used for login only and is not stored in the session.</small></p>
+    <form method="post">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" required value="{{ email }}">
+
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" required>
+
+      <button type="submit">Log in</button>
+    </form>
+  </div>
+{% endblock %}

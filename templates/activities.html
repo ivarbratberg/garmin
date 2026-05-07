@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+
+{% block title %}Latest Activities{% endblock %}
+
+{% block content %}
+  <div class="card">
+    <h1>Latest Activities</h1>
+    <p>Signed in as <strong>{{ email }}</strong></p>
+    <p>
+      <a class="button-link secondary" href="{{ url_for('logout') }}">Log out</a>
+    </p>
+
+    {% if activities %}
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Start Time</th>
+            <th>Distance (km)</th>
+            <th>Duration (min)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for activity in activities %}
+            <tr>
+              <td>{{ activity.get("activityName", "N/A") }}</td>
+              <td>{{ activity.get("activityType", {}).get("typeKey", "N/A") }}</td>
+              <td>{{ activity.get("startTimeLocal", "N/A") }}</td>
+              <td>
+                {{ "%.2f"|format((activity.get("distance", 0) / 1000)) }}
+              </td>
+              <td>
+                {{ "%.1f"|format((activity.get("duration", 0) / 60)) }}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p>No activities found.</p>
+    {% endif %}
+  </div>
+{% endblock %}

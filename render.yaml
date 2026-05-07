@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: garmin-activities
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
+    envVars:
+      - key: FLASK_SECRET_KEY
+        generateValue: true
+      - key: FLASK_DEBUG
+        value: "0"
+      - key: SESSION_COOKIE_SECURE
+        value: "true"
+      - key: GARMIN_TOKEN_ROOT
+        value: /var/data/garmin_tokens
+    disks:
+      - name: garmin-data
+        mountPath: /var/data
+        sizeGB: 1
