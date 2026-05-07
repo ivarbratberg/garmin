@@ -14,7 +14,7 @@ services:
         value: "true"
       - key: GARMIN_TOKEN_ROOT
         value: /var/data/garmin_tokens
-    disks:
-      - name: garmin-data
-        mountPath: /var/data
-        sizeGB: 1
+    disk:
+      name: garmin-data
+      mountPath: /var/data
+      sizeGB: 1
