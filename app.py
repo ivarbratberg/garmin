@@ -65,6 +65,162 @@ def load_activities(email: str, token_store: str, limit: int = 10) -> list[dict[
     return client.get_activities(0, limit)
 
 
+def is_running_activity(activity: dict[str, Any]) -> bool:
+    type_key = (activity.get("activityType") or {}).get("typeKey") or ""
+    return "running" in type_key.lower()
+
+
+def _activity_average_hr(activity: dict[str, Any]) -> float | None:
+    for key in ("averageHR", "averageHeartRate", "avgHr", "avgHeartRate"):
+        raw = activity.get(key)
+        if raw is None:
+            continue
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _hr_intensity_factor(hr: float, threshold_hr: float) -> float:
+    """Relative intensity vs lactate-threshold HR, clamped to avoid wild values."""
+    if threshold_hr <= 0:
+        return 0.0
+    return max(0.35, min(1.55, hr / threshold_hr))
+
+
+def estimate_running_rtss(
+    activity: dict[str, Any],
+    threshold_hr: int | None,
+    *,
+    details: dict[str, Any] | None = None,
+) -> float | None:
+    """Approximate running stress on the TSS scale from HR vs threshold HR.
+
+    Uses the common TSS-style duration weighting (IF² × hours × 100). This is an
+    estimate only; official TrainingPeaks rTSS uses pace, not HR.
+    """
+    if threshold_hr is None or threshold_hr <= 0:
+        return None
+    if not is_running_activity(activity):
+        return None
+
+    duration_s = activity.get("duration")
+    if duration_s is None:
+        return None
+    try:
+        duration_f = float(duration_s)
+    except (TypeError, ValueError):
+        return None
+    if duration_f <= 0:
+        return None
+
+    thr = float(threshold_hr)
+
+    if details:
+        stream_tss = _rtss_from_hr_stream(details, thr, duration_f)
+        if stream_tss is not None:
+            return stream_tss
+
+    avg_hr = _activity_average_hr(activity)
+    if avg_hr is None:
+        return None
+
+    IF = _hr_intensity_factor(avg_hr, thr)
+    return (duration_f / 3600.0) * IF * IF * 100.0
+
+
+def _rtss_from_hr_stream(
+    details: dict[str, Any],
+    threshold_hr: float,
+    duration_s: float,
+) -> float | None:
+    """Integrate IF² over time using directHeartRate samples when present."""
+    descriptors = details.get("metricDescriptors") or []
+    samples = details.get("activityDetailMetrics") or []
+    if not isinstance(descriptors, list) or not isinstance(samples, list):
+        return None
+
+    hr_idx: int | None = None
+    time_idx: int | None = None
+    for i, desc in enumerate(descriptors):
+        if not isinstance(desc, dict):
+            continue
+        key = desc.get("key") or ""
+        if key in ("directHeartRate", "heartRate"):
+            hr_idx = i
+        if key in _TIME_METRIC_KEYS:
+            time_idx = i
+    if hr_idx is None:
+        return None
+
+    if time_idx is None:
+        for i, desc in enumerate(descriptors):
+            if not isinstance(desc, dict):
+                continue
+            k = (desc.get("key") or "").lower()
+            if any(t in k for t in ("elapsed", "timer", "clock")):
+                time_idx = i
+                break
+
+    times: list[float] = []
+    hrs: list[float] = []
+    for sample in samples:
+        if not isinstance(sample, dict):
+            continue
+        mvals = sample.get("metrics")
+        if not isinstance(mvals, list):
+            continue
+        if hr_idx >= len(mvals):
+            continue
+        raw_hr = mvals[hr_idx]
+        if raw_hr is None:
+            continue
+        try:
+            hr = float(raw_hr)
+        except (TypeError, ValueError):
+            continue
+
+        if time_idx is not None and time_idx < len(mvals):
+            raw_t = mvals[time_idx]
+            if raw_t is not None:
+                try:
+                    t = float(raw_t)
+                    if t > 1e6:
+                        t = t / 1000.0
+                    times.append(t)
+                    hrs.append(hr)
+                    continue
+                except (TypeError, ValueError):
+                    pass
+        times.append(float(len(times)))
+        hrs.append(hr)
+
+    if len(hrs) < 3:
+        return None
+
+    t0 = times[0]
+    pairs = [(times[i] - t0, hrs[i]) for i in range(len(times))]
+
+    total_if2_dt = 0.0
+    for i in range(len(pairs) - 1):
+        t1, hr1 = pairs[i]
+        t2, hr2 = pairs[i + 1]
+        dt = t2 - t1
+        if dt <= 0:
+            continue
+        hr_mid = (hr1 + hr2) / 2.0
+        IF = _hr_intensity_factor(hr_mid, threshold_hr)
+        total_if2_dt += IF * IF * dt
+
+    last_t = pairs[-1][0]
+    if duration_s > last_t + 1.0:
+        IF = _hr_intensity_factor(pairs[-1][1], threshold_hr)
+        total_if2_dt += IF * IF * (duration_s - last_t)
+
+    return (total_if2_dt / 3600.0) * 100.0
+
+
 _TIME_METRIC_KEYS = (
     "sumElapsedDuration",
     "timerDurationInSeconds",
@@ -248,7 +404,67 @@ def activities():
         flash("Could not load activities. Please log in again.", "error")
         return redirect(url_for("login"))
 
-    return render_template("activities.html", activities=activities_list, email=email)
+    threshold_hr = session.get("threshold_hr")
+    use_hr_stream = os.getenv("RTSS_USE_ACTIVITY_STREAM", "0").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    rtss_map: dict[Any, float | None] = {}
+    stream_client: Garmin | None = None
+    for a in activities_list:
+        aid = a.get("activityId")
+        if aid is None:
+            continue
+        details: dict[str, Any] | None = None
+        if use_hr_stream and threshold_hr and is_running_activity(a):
+            try:
+                if stream_client is None:
+                    stream_client = _build_client(email=email, token_store=token_store)
+                details = stream_client.get_activity_details(
+                    str(aid), maxchart=2000, maxpoly=2000
+                )
+            except Exception:
+                app.logger.debug("Could not load details for rTSS (activity %s)", aid)
+                details = None
+        rtss_map[aid] = estimate_running_rtss(
+            a, threshold_hr, details=details
+        )
+
+    return render_template(
+        "activities.html",
+        activities=activities_list,
+        email=email,
+        threshold_hr=threshold_hr,
+        rtss_map=rtss_map,
+    )
+
+
+@app.post("/settings/threshold-hr")
+def set_threshold_hr():
+    if not session.get("garmin_email") or not session.get("garmin_token_store"):
+        flash("Please log in first.", "error")
+        return redirect(url_for("login"))
+
+    raw = (request.form.get("threshold_hr") or "").strip()
+    if not raw:
+        session.pop("threshold_hr", None)
+        flash("Threshold HR cleared.", "info")
+        return redirect(url_for("activities"))
+
+    try:
+        value = int(raw)
+    except ValueError:
+        flash("Threshold HR must be a whole number (bpm).", "error")
+        return redirect(url_for("activities"))
+
+    if value < 100 or value > 220:
+        flash("Threshold HR should be between 100 and 220 bpm.", "error")
+        return redirect(url_for("activities"))
+
+    session["threshold_hr"] = value
+    flash("Threshold HR saved. rTSS estimates updated for running activities.", "info")
+    return redirect(url_for("activities"))
 
 
 @app.get("/api/activities/<int:activity_id>/chart-data")

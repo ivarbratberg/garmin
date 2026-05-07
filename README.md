@@ -27,6 +27,13 @@ Open [http://127.0.0.1:5000](http://127.0.0.1:5000).
 - Garmin tokens are stored under `instance/garmin_tokens` by default and removed on logout.
 - You can override token storage location with `GARMIN_TOKEN_ROOT`.
 
+## rTSS (running, HR-based estimate)
+
+On the activities page, set **threshold HR (LTHR)** in bpm. For **running** activities, the app shows **rTSS (est.)** using a TSS-style formula: intensity factor ≈ HR ÷ LTHR (clamped), then **IF² × hours × 100**. This is an **approximation**; TrainingPeaks “rTSS” is normally pace-based, not HR-based.
+
+- By default, the estimate uses Garmin’s **average HR** from the activity summary (no extra API calls).
+- Set `RTSS_USE_ACTIVITY_STREAM=1` to integrate HR **per recorded sample** from activity details (more accurate, more Garmin API requests).
+
 ## Deploy (Render)
 
 1. Push this project to GitHub.

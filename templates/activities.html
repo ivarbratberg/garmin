@@ -13,6 +13,35 @@
       Click a row to open charts and choose which metrics to plot.
     </p>
 
+    <form
+      method="post"
+      action="{{ url_for('set_threshold_hr') }}"
+      class="threshold-form"
+      style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:0.75rem;margin:1rem 0;padding:0.75rem;background:#f8f8f8;border-radius:6px;border:1px solid #e5e5e5;"
+    >
+      <div style="flex:1;min-width:12rem;">
+        <label for="threshold_hr" style="display:block;font-size:0.9rem;margin-bottom:0.25rem;">
+          Threshold HR (LTHR, bpm)
+        </label>
+        <input
+          type="number"
+          name="threshold_hr"
+          id="threshold_hr"
+          min="100"
+          max="220"
+          step="1"
+          placeholder="e.g. 170"
+          value="{{ threshold_hr if threshold_hr is not none else '' }}"
+          style="max-width:10rem;padding:0.45rem;"
+        >
+      </div>
+      <button type="submit">Save</button>
+    </form>
+    <p class="chart-status" style="font-size:0.85rem;color:#555;margin-top:0;">
+      <strong>rTSS (est.)</strong> uses your threshold HR and activity heart rate (TSS-style: IF² × duration).
+      Shown for <strong>running</strong> activities only. Official TrainingPeaks rTSS is pace-based; this is an HR approximation.
+    </p>
+
     {% if activities %}
       <table>
         <thead>
@@ -22,10 +51,13 @@
             <th>Start Time</th>
             <th>Distance (km)</th>
             <th>Duration (min)</th>
+            <th title="Estimated running TSS from HR vs LTHR">rTSS (est.)</th>
           </tr>
         </thead>
         <tbody>
           {% for activity in activities %}
+            {% set aid = activity.get('activityId') %}
+            {% set r = rtss_map.get(aid) if aid is not none else none %}
             <tr class="activity-row" data-activity-id="{{ activity.get('activityId', '') }}">
               <td>{{ activity.get("activityName", "N/A") }}</td>
               <td>{{ activity.get("activityType", {}).get("typeKey", "N/A") }}</td>
@@ -35,6 +67,13 @@
               </td>
               <td>
                 {{ "%.1f"|format((activity.get("duration", 0) / 60)) }}
+              </td>
+              <td>
+                {% if r is not none %}
+                  {{ "%.0f"|format(r) }}
+                {% else %}
+                  —
+                {% endif %}
               </td>
             </tr>
           {% endfor %}
