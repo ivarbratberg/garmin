@@ -373,12 +373,15 @@ def _series_from_activity_details(
             data = [None if v is None else (v * 3.6) for v in data]
             unit = "km/h"
 
-        # Garmin Connect IQ developer field 00 is used as power in this app.
+        # Power detection:
+        # - Prefer known Connect IQ developer field 00 names.
+        # - Otherwise, treat any field containing "00" as power (user-provided heuristic).
+        key_l = str(key).lower()
         if key in (
             "Connect IQDeveloper Field00",
             "Connect IQDeveloper Field 00",
             "Connect IQDeveloper Field-00",
-        ):
+        ) or ("00" in key_l):
             label = "Power"
         else:
             readable = re.sub(r"([a-z])([A-Z])", r"\1 \2", key)
@@ -509,12 +512,8 @@ def _series_from_activity_details(
     ) or _metric_by_substring(
         (
             "power",
-            "connect iqdeveloper field00",
-            "connect iqdeveloper field 00",
-            "connect iqdeveloper field-00",
-            "developer field00",
-            "developer field 00",
-            "developer field-00",
+            # Heuristic fallback: as long as a field name contains "00", treat it as power.
+            "00",
         )
     )
 
