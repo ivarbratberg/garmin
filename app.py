@@ -351,7 +351,11 @@ def _series_from_activity_details(details: dict[str, Any]) -> tuple[list[str], l
 
         # Garmin Connect IQ developer fields can contain custom power-like streams;
         # rename them to a user-friendly label in the chart legend.
-        if key in ("Connect IQDeveloper Field00", "Connect IQDeveloper Field 00"):
+        if key in (
+            "Connect IQDeveloper Field00",
+            "Connect IQDeveloper Field 00",
+            "Connect IQDeveloper Field-00",
+        ):
             label = "Power"
         else:
             readable = re.sub(r"([a-z])([A-Z])", r"\1 \2", key)
@@ -406,6 +410,7 @@ def _series_from_activity_details(details: dict[str, Any]) -> tuple[list[str], l
         (
             "Connect IQDeveloper Field00",
             "Connect IQDeveloper Field 00",
+            "Connect IQDeveloper Field-00",
             "directPower",
             "power",
         )
