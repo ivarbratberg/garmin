@@ -176,6 +176,24 @@
         return options;
       }
 
+      function trapChartInputEvents(el) {
+        if (!el || el.__trapChartInputEvents) return;
+        el.__trapChartInputEvents = true;
+
+        // Prevent the page behind the modal from scrolling/handling clicks
+        // when the user interacts with the chart.
+        el.addEventListener("wheel", function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+        }, { passive: false });
+
+        ["mousedown", "mouseup", "click", "dblclick", "contextmenu"].forEach(function (evt) {
+          el.addEventListener(evt, function (e) {
+            e.stopPropagation();
+          });
+        });
+      }
+
       function openModal() {
         modal.classList.add("open");
       }
@@ -291,6 +309,9 @@
             scales: scales,
           }),
         });
+
+        // Keep interactions scoped to the modal chart.
+        trapChartInputEvents(canvas);
       }
 
       function buildPicker(payload) {
