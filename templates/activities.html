@@ -113,6 +113,10 @@
         <button type="button" class="modal-close" id="chart-modal-close" aria-label="Close">&times;</button>
       </div>
       <div id="chart-modal-status" class="chart-status"></div>
+      <details id="chart-modal-debug" style="margin:0.35rem 0 0.65rem;" hidden>
+        <summary style="cursor:pointer;">Debug</summary>
+        <pre id="chart-modal-debug-pre" style="white-space:pre-wrap;font-size:0.82rem;margin:0.5rem 0 0;"></pre>
+      </details>
       <div id="metric-picker" class="metric-picker" hidden></div>
       <div class="chart-wrap">
         <canvas id="activity-chart"></canvas>
@@ -126,6 +130,8 @@
       const modal = document.getElementById("chart-modal");
       const titleEl = document.getElementById("chart-modal-title");
       const statusEl = document.getElementById("chart-modal-status");
+      const debugDetailsEl = document.getElementById("chart-modal-debug");
+      const debugPreEl = document.getElementById("chart-modal-debug-pre");
       const pickerEl = document.getElementById("metric-picker");
       const closeBtn = document.getElementById("chart-modal-close");
       const canvas = document.getElementById("activity-chart");
@@ -150,6 +156,8 @@
         pickerEl.innerHTML = "";
         pickerEl.hidden = true;
         statusEl.textContent = "";
+        debugPreEl.textContent = "";
+        debugDetailsEl.hidden = true;
       }
 
       function axisIdForUnit(unit) {
@@ -280,6 +288,8 @@
         openModal();
         titleEl.textContent = "Loading…";
         statusEl.textContent = "Fetching activity details…";
+        debugPreEl.textContent = "";
+        debugDetailsEl.hidden = true;
         pickerEl.hidden = true;
         pickerEl.innerHTML = "";
         if (chart) {
@@ -321,6 +331,28 @@
         } else {
           statusEl.textContent = "";
         }
+
+        const dbg = payload.debug || null;
+        if (dbg && (dbg.velocityPerPowerReason || (dbg.receivedFields && dbg.receivedFields.length))) {
+          const lines = [];
+          if (dbg.velocityPerPowerReason) lines.push("velocityPerPower: " + dbg.velocityPerPowerReason);
+          if (dbg.receivedFields && dbg.receivedFields.length) {
+            lines.push("");
+            lines.push("Fields received from Garmin:");
+            dbg.receivedFields.forEach(function (f) {
+              const k = (f && f.key) ? String(f.key) : "";
+              if (!k) return;
+              const u = (f && f.unit) ? String(f.unit) : "";
+              lines.push("- " + k + (u ? (" (" + u + ")") : ""));
+            });
+          }
+          debugPreEl.textContent = lines.join("\n");
+          debugDetailsEl.hidden = false;
+        } else {
+          debugPreEl.textContent = "";
+          debugDetailsEl.hidden = true;
+        }
+
         buildPicker(payload);
         renderChart();
       }

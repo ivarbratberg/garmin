@@ -267,14 +267,32 @@ def _format_elapsed_label(seconds: float) -> str:
     return f"{m}:{s:02d}"
 
 
-def _series_from_activity_details(details: dict[str, Any]) -> tuple[list[str], list[dict[str, Any]]]:
-    """Turn Garmin activity details JSON into x-labels and plottable metric series."""
+def _series_from_activity_details(
+    details: dict[str, Any],
+) -> tuple[list[str], list[dict[str, Any]], dict[str, Any]]:
+    """Turn Garmin activity details JSON into x-labels and plottable metric series.
+
+    Also returns lightweight debug info to help explain missing derived metrics.
+    """
     descriptors = details.get("metricDescriptors") or []
     samples = details.get("activityDetailMetrics") or []
     if not isinstance(descriptors, list) or not descriptors:
-        return [], []
+        return [], [], {"receivedFields": [], "velocityPerPowerReason": "No metric descriptors in activity details."}
     if not isinstance(samples, list):
-        return [], []
+        return [], [], {"receivedFields": [], "velocityPerPowerReason": "No activityDetailMetrics array in activity details."}
+
+    received_fields: list[dict[str, Any]] = []
+    for d in descriptors:
+        if not isinstance(d, dict):
+            continue
+        k = d.get("key")
+        u = d.get("unit")
+        unit_key = None
+        if isinstance(u, dict):
+            unit_key = u.get("key") or u.get("factor")
+        elif isinstance(u, str):
+            unit_key = u
+        received_fields.append({"key": k, "unit": unit_key})
 
     n_desc = len(descriptors)
     columns: list[list[Any]] = [[] for _ in range(n_desc)]
@@ -475,6 +493,8 @@ def _series_from_activity_details(details: dict[str, Any]) -> tuple[list[str], l
                     }
                 )
 
+    velocity_per_power_reason: str | None = None
+
     # Derived metric: velocity / power (only when power is available).
     # User requirement: use "Direct Speed" (`directSpeed`) for velocity in this calculation.
     speed_m = _metric_by_key_preference(("directSpeed",))
@@ -509,11 +529,23 @@ def _series_from_activity_details(details: dict[str, Any]) -> tuple[list[str], l
             speed_data = _to_kmh(speed_data)
             speed_unit = "km/h"
 
+    if speed_data is None and power_m:
+        velocity_per_power_reason = "Not calculated: missing Direct Speed stream (`directSpeed`)."
+    elif speed_data is not None and not power_m:
+        velocity_per_power_reason = (
+            "Not calculated: missing power stream (expected `Connect IQDeveloper Field00` / variants, or `directPower`)."
+        )
+    elif speed_data is None and not power_m:
+        velocity_per_power_reason = (
+            "Not calculated: missing both Direct Speed (`directSpeed`) and power (`Connect IQDeveloper Field00` / variants)."
+        )
+
     if speed_data is not None and power_m:
         speed = speed_data
         power = power_m.get("data") or []
         ratio: list[float | None] = []
         any_power = False
+        any_ratio = False
         # Align by sample index across full row_count (avoid zip truncation).
         for i in range(row_count):
             sv = speed[i] if i < len(speed) else None
@@ -539,6 +571,16 @@ def _series_from_activity_details(details: dict[str, Any]) -> tuple[list[str], l
                 ratio.append(None)
                 continue
             ratio.append(s / p)
+            any_ratio = True
+
+        if not any_power:
+            velocity_per_power_reason = (
+                "Not calculated: power stream exists but contains no non-zero numeric samples."
+            )
+        elif not any_ratio or not any(x is not None for x in ratio):
+            velocity_per_power_reason = (
+                "Not calculated: no aligned samples where both speed and non-zero power are present."
+            )
 
         if any_power and any(x is not None for x in ratio):
             speed_unit_str = speed_unit or ""
@@ -552,8 +594,13 @@ def _series_from_activity_details(details: dict[str, Any]) -> tuple[list[str], l
                     "data": ratio + [None] * (row_count - len(ratio)),
                 }
             )
+            velocity_per_power_reason = None
 
-    return labels, metrics_out
+    debug = {
+        "receivedFields": received_fields,
+        "velocityPerPowerReason": velocity_per_power_reason or "Calculated.",
+    }
+    return labels, metrics_out, debug
 
 
 @app.get("/")
@@ -685,7 +732,14 @@ def activity_chart_data(activity_id: int):
         return jsonify({"error": "garmin_error"}), 502
 
     title = summary.get("activityName") or f"Activity {activity_id}"
-    labels, metrics = _series_from_activity_details(details)
+    labels, metrics, debug = _series_from_activity_details(details)
+
+    # Print out all fields received from Garmin (server logs).
+    try:
+        keys = [f.get("key") for f in (debug.get("receivedFields") or []) if f.get("key")]
+        app.logger.info("Garmin fields for activity %s: %s", activity_id, ", ".join(map(str, keys)))
+    except Exception:
+        app.logger.debug("Could not log Garmin fields for activity %s", activity_id)
     if not metrics:
         return jsonify(
             {
@@ -694,6 +748,7 @@ def activity_chart_data(activity_id: int):
                 "labels": labels,
                 "metrics": [],
                 "message": "No time-series metrics available for this activity.",
+                "debug": debug,
             }
         )
 
@@ -703,6 +758,7 @@ def activity_chart_data(activity_id: int):
             "title": title,
             "labels": labels,
             "metrics": metrics,
+            "debug": debug,
         }
     )
 
