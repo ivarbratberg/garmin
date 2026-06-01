@@ -378,6 +378,69 @@ def _series_from_activity_details(details: dict[str, Any]) -> tuple[list[str], l
         elif len(d) < row_count:
             m["data"] = d + [None] * (row_count - len(d))
 
+    def _metric_by_key_preference(keys: tuple[str, ...]) -> dict[str, Any] | None:
+        for k in keys:
+            hit = next((m for m in metrics_out if m.get("key") == k), None)
+            if hit is not None:
+                return hit
+        return None
+
+    def _metric_by_substring(substrings: tuple[str, ...]) -> dict[str, Any] | None:
+        for m in metrics_out:
+            key = (m.get("key") or "").lower()
+            if any(s in key for s in substrings):
+                return m
+        return None
+
+    # Derived metric: velocity / power (only when power is available).
+    # Garmin speed is typically in m/s; power in watts. We keep a simple composite unit string.
+    speed_m = _metric_by_key_preference(("directSpeed", "speed")) or _metric_by_substring(
+        ("speed", "velocity")
+    )
+    power_m = _metric_by_key_preference(("directPower", "power")) or _metric_by_substring(
+        ("power",)
+    )
+    if speed_m and power_m:
+        speed = speed_m.get("data") or []
+        power = power_m.get("data") or []
+        ratio: list[float | None] = []
+        any_power = False
+        for sv, pv in zip(speed, power):
+            if pv is None:
+                ratio.append(None)
+                continue
+            try:
+                p = float(pv)
+            except (TypeError, ValueError):
+                ratio.append(None)
+                continue
+            if p == 0:
+                ratio.append(None)
+                continue
+            any_power = True
+            if sv is None:
+                ratio.append(None)
+                continue
+            try:
+                s = float(sv)
+            except (TypeError, ValueError):
+                ratio.append(None)
+                continue
+            ratio.append(s / p)
+
+        if any_power and any(x is not None for x in ratio):
+            speed_unit = speed_m.get("unit") or ""
+            power_unit = power_m.get("unit") or "W"
+            unit = f"{speed_unit}/{power_unit}".strip("/") if (speed_unit or power_unit) else None
+            metrics_out.append(
+                {
+                    "key": "velocityPerPower",
+                    "label": f"Velocity / Power ({unit})" if unit else "Velocity / Power",
+                    "unit": unit,
+                    "data": ratio + [None] * (row_count - len(ratio)),
+                }
+            )
+
     return labels, metrics_out
 
 

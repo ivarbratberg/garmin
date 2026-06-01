@@ -266,7 +266,7 @@
           input.type = "checkbox";
           input.value = m.key;
           input.id = id;
-          input.checked = idx < 3;
+          input.checked = (m.key === "velocityPerPower") || (idx < 3);
           input.addEventListener("change", renderChart);
           wrap.appendChild(input);
           const span = document.createElement("span");
