@@ -181,7 +181,10 @@
           pan: {
             enabled: true,
             mode: "x",
-            modifierKey: "shift",
+            // Explicitly allow panning without a modifier key.
+            // (Some builds default to requiring Ctrl if this is omitted.)
+            modifierKey: null,
+            threshold: 0,
           },
           zoom: {
             wheel: { enabled: true },
