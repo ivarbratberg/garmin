@@ -112,7 +112,12 @@
         <h2 id="chart-modal-title">Activity</h2>
         <button type="button" class="modal-close" id="chart-modal-close" aria-label="Close">&times;</button>
       </div>
-      <div id="chart-modal-status" class="chart-status"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;flex-wrap:wrap;">
+        <div id="chart-modal-status" class="chart-status"></div>
+        <button type="button" id="chart-reset-zoom" class="button-link secondary" style="padding:0.35rem 0.6rem;">
+          Reset zoom
+        </button>
+      </div>
       <details id="chart-modal-debug" style="margin:0.35rem 0 0.65rem;" hidden>
         <summary style="cursor:pointer;">Debug</summary>
         <pre id="chart-modal-debug-pre" style="white-space:pre-wrap;font-size:0.82rem;margin:0.5rem 0 0;"></pre>
@@ -125,11 +130,13 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.umd.min.js"></script>
   <script>
     (function () {
       const modal = document.getElementById("chart-modal");
       const titleEl = document.getElementById("chart-modal-title");
       const statusEl = document.getElementById("chart-modal-status");
+      const resetZoomBtn = document.getElementById("chart-reset-zoom");
       const debugDetailsEl = document.getElementById("chart-modal-debug");
       const debugPreEl = document.getElementById("chart-modal-debug-pre");
       const pickerEl = document.getElementById("metric-picker");
@@ -141,6 +148,28 @@
       let chart = null;
       let hrvChart = null;
       let lastPayload = null;
+
+      function applyZoomOptions(options) {
+        options = options || {};
+        options.plugins = options.plugins || {};
+        options.plugins.zoom = {
+          pan: {
+            enabled: true,
+            mode: "x",
+            modifierKey: "shift",
+          },
+          zoom: {
+            wheel: { enabled: true },
+            pinch: { enabled: true },
+            mode: "x",
+          },
+          limits: {
+            x: { min: "original", max: "original" },
+            y: { min: "original", max: "original" },
+          },
+        };
+        return options;
+      }
 
       function openModal() {
         modal.classList.add("open");
@@ -246,7 +275,7 @@
         chart = new Chart(canvas.getContext("2d"), {
           type: "line",
           data: { labels: labels, datasets: datasets },
-          options: {
+          options: applyZoomOptions({
             responsive: true,
             maintainAspectRatio: false,
             interaction: { mode: "index", intersect: false },
@@ -255,7 +284,7 @@
               tooltip: { enabled: true },
             },
             scales: scales,
-          },
+          }),
         });
       }
 
@@ -410,7 +439,7 @@
               },
             ],
           },
-          options: {
+          options: applyZoomOptions({
             responsive: true,
             maintainAspectRatio: false,
             interaction: { mode: "index", intersect: false },
@@ -420,7 +449,7 @@
                 title: { display: true, text: "HRV (ms)" },
               },
             },
-          },
+          }),
         });
         hrvStatusEl.textContent = "";
         renderHrvSummary(payload.latest || null);
@@ -475,6 +504,9 @@
       loadHrv(7);
 
       closeBtn.addEventListener("click", closeModal);
+      resetZoomBtn.addEventListener("click", function () {
+        if (chart && typeof chart.resetZoom === "function") chart.resetZoom();
+      });
       modal.addEventListener("click", function (e) {
         if (e.target === modal) closeModal();
       });
