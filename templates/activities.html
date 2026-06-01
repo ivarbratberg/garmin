@@ -133,6 +133,11 @@
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.umd.min.js"></script>
   <script>
     (function () {
+      // Chart.js v4 requires explicit plugin registration.
+      if (window.Chart && window.ChartZoom) {
+        Chart.register(ChartZoom);
+      }
+
       const modal = document.getElementById("chart-modal");
       const titleEl = document.getElementById("chart-modal-title");
       const statusEl = document.getElementById("chart-modal-status");
