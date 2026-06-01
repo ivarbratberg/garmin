@@ -153,6 +153,31 @@
       let chart = null;
       let hrvChart = null;
       let lastPayload = null;
+      let previousBodyOverflow = "";
+
+      // When the modal is open, prevent the background page from scrolling.
+      // This avoids wheel/click interactions being "stolen" by the underlying page.
+      const modalPanel = modal.querySelector(".modal-panel");
+      function lockBackgroundScroll() {
+        previousBodyOverflow = document.body.style.overflow || "";
+        document.body.style.overflow = "hidden";
+      }
+      function unlockBackgroundScroll() {
+        document.body.style.overflow = previousBodyOverflow;
+      }
+
+      // Prevent default scrolling while interacting inside the modal panel,
+      // without blocking the zoom plugin's own wheel handler on the canvas.
+      if (modalPanel) {
+        modalPanel.addEventListener(
+          "wheel",
+          function (e) {
+            // Let the chart zoom handler run; we only prevent page scroll.
+            e.preventDefault();
+          },
+          { passive: false }
+        );
+      }
 
       function applyZoomOptions(options) {
         options = options || {};
@@ -196,10 +221,12 @@
 
       function openModal() {
         modal.classList.add("open");
+        lockBackgroundScroll();
       }
 
       function closeModal() {
         modal.classList.remove("open");
+        unlockBackgroundScroll();
         if (chart) {
           chart.destroy();
           chart = null;
