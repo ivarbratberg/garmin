@@ -349,9 +349,14 @@ def _series_from_activity_details(details: dict[str, Any]) -> tuple[list[str], l
         if not any(x is not None for x in data):
             continue
 
-        readable = re.sub(r"([a-z])([A-Z])", r"\1 \2", key)
-        readable = readable.replace("_", " ").strip()
-        label = readable[:1].upper() + readable[1:] if readable else key
+        # Garmin Connect IQ developer fields can contain custom power-like streams;
+        # rename them to a user-friendly label in the chart legend.
+        if key in ("Connect IQDeveloper Field00", "Connect IQDeveloper Field 00"):
+            label = "Power"
+        else:
+            readable = re.sub(r"([a-z])([A-Z])", r"\1 \2", key)
+            readable = readable.replace("_", " ").strip()
+            label = readable[:1].upper() + readable[1:] if readable else key
         unit_suffix = f" ({unit})" if unit else ""
         metrics_out.append(
             {
@@ -397,9 +402,14 @@ def _series_from_activity_details(details: dict[str, Any]) -> tuple[list[str], l
     speed_m = _metric_by_key_preference(("directSpeed", "speed")) or _metric_by_substring(
         ("speed", "velocity")
     )
-    power_m = _metric_by_key_preference(("directPower", "power")) or _metric_by_substring(
-        ("power",)
-    )
+    power_m = _metric_by_key_preference(
+        (
+            "Connect IQDeveloper Field00",
+            "Connect IQDeveloper Field 00",
+            "directPower",
+            "power",
+        )
+    ) or _metric_by_substring(("power", "connect iqdeveloper field00", "developer field00"))
     if speed_m and power_m:
         speed = speed_m.get("data") or []
         power = power_m.get("data") or []
