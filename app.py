@@ -349,6 +349,12 @@ def _series_from_activity_details(details: dict[str, Any]) -> tuple[list[str], l
         if not any(x is not None for x in data):
             continue
 
+        unit_norm = unit.strip().lower()
+        # Expose speed as km/h (Garmin direct speed is typically m/s aka "mps").
+        if key == "directSpeed" and unit_norm in ("mps", "m/s", "meters_per_second"):
+            data = [None if v is None else (v * 3.6) for v in data]
+            unit = "km/h"
+
         # Garmin Connect IQ developer fields can contain custom power-like streams;
         # rename them to a user-friendly label in the chart legend.
         if "00" in key:
@@ -397,9 +403,78 @@ def _series_from_activity_details(details: dict[str, Any]) -> tuple[list[str], l
                 return m
         return None
 
+    def _speed_series_from_pace(pace_m: dict[str, Any]) -> tuple[list[float | None], str | None]:
+        """Convert a pace-like stream to speed (m/s-ish) using a simple heuristic."""
+        pace = pace_m.get("data") or []
+        out: list[float | None] = []
+        any_val = False
+        for pv in pace:
+            if pv is None:
+                out.append(None)
+                continue
+            try:
+                p = float(pv)
+            except (TypeError, ValueError):
+                out.append(None)
+                continue
+            if p <= 0:
+                out.append(None)
+                continue
+            any_val = True
+            # Heuristic:
+            # - If pace values look like seconds per kilometer (> ~50), convert to m/s via 1000 / s_per_km
+            # - Otherwise assume seconds per meter and convert via 1 / s_per_m
+            out.append((1000.0 / p) if p > 50.0 else (1.0 / p))
+        if not any_val:
+            return [], None
+        return out, "m/s"
+
+    def _to_kmh(speed: list[float | None]) -> list[float | None]:
+        return [None if v is None else (float(v) * 3.6) for v in speed]
+
+    def _pace_min_per_km_from_kmh(speed_kmh: list[float | None]) -> list[float | None]:
+        out: list[float | None] = []
+        for v in speed_kmh:
+            if v is None:
+                out.append(None)
+                continue
+            try:
+                s = float(v)
+            except (TypeError, ValueError):
+                out.append(None)
+                continue
+            if s <= 0:
+                out.append(None)
+                continue
+            out.append(60.0 / s)
+        return out
+
+    # Derived metric: pace (min/km) from speed when present.
+    speed_for_pace_m = _metric_by_key_preference(("directSpeed", "enhancedSpeed", "speed")) or _metric_by_substring(
+        ("speed",)
+    )
+    if speed_for_pace_m:
+        s_unit = (speed_for_pace_m.get("unit") or "").strip().lower()
+        s_data = speed_for_pace_m.get("data") or []
+        # Ensure km/h for pace derivation.
+        if s_unit in ("mps", "m/s", "meters_per_second"):
+            s_data = _to_kmh(s_data)
+            s_unit = "km/h"
+        if s_unit == "km/h" and any(x is not None for x in s_data):
+            pace_min_per_km = _pace_min_per_km_from_kmh(s_data)
+            if any(x is not None for x in pace_min_per_km):
+                metrics_out.append(
+                    {
+                        "key": "paceMinPerKm",
+                        "label": "Pace (min/km)",
+                        "unit": "min/km",
+                        "data": pace_min_per_km + [None] * (row_count - len(pace_min_per_km)),
+                    }
+                )
+
     # Derived metric: velocity / power (only when power is available).
     # Garmin speed is typically in m/s; power in watts. We keep a simple composite unit string.
-    speed_m = _metric_by_key_preference(("directSpeed", "speed")) or _metric_by_substring(
+    speed_m = _metric_by_key_preference(("directSpeed", "enhancedSpeed", "speed")) or _metric_by_substring(
         ("speed", "velocity")
     )
     power_m = _metric_by_key_preference(
@@ -411,8 +486,30 @@ def _series_from_activity_details(details: dict[str, Any]) -> tuple[list[str], l
             "power",
         )
     ) or _metric_by_substring(("power", "connect iqdeveloper field00", "developer field00"))
-    if speed_m and power_m:
-        speed = speed_m.get("data") or []
+
+    speed_data: list[float | None] | None = None
+    speed_unit: str | None = None
+    if speed_m:
+        speed_data = speed_m.get("data") or []
+        speed_unit = speed_m.get("unit") or None
+        # Garmin "Direct Speed" is commonly m/s ("mps"). Convert to km/h for display + derived metric.
+        speed_key = str(speed_m.get("key")).lower().strip()
+        unit_norm = (speed_unit or "").strip().lower()
+        if "direct speed" in speed_key or unit_norm in ("mps", "m/s", "meters_per_second"):
+            speed_data = _to_kmh(speed_data)
+            speed_unit = "km/h"
+    else:
+        # Some activities provide pace rather than speed; derive speed from pace when present.
+        pace_m = _metric_by_key_preference(("directPace", "pace")) or _metric_by_substring(("pace",))
+        if pace_m:
+            derived_speed, derived_unit = _speed_series_from_pace(pace_m)
+            if derived_speed:
+                # Keep derived speed consistent with Direct Speed: km/h.
+                speed_data = _to_kmh(derived_speed)
+                speed_unit = "km/h"
+
+    if speed_data is not None and power_m:
+        speed = speed_data
         power = power_m.get("data") or []
         ratio: list[float | None] = []
         any_power = False
@@ -440,7 +537,7 @@ def _series_from_activity_details(details: dict[str, Any]) -> tuple[list[str], l
             ratio.append(s / p)
 
         if any_power and any(x is not None for x in ratio):
-            speed_unit = speed_m.get("unit") or ""
+            speed_unit_str = speed_unit or ""
             power_unit = power_m.get("unit") or "W"
             unit = f"{speed_unit}/{power_unit}".strip("/") if (speed_unit or power_unit) else None
             metrics_out.append(
